@@ -1,0 +1,42 @@
+# Overlay file — joined with the main docker-compose.yaml to add a LiteLLM proxy.
+# Usage:
+#   docker compose -f docker-compose.yaml -f docker-compose.litellm.yaml up -d
+# Or set in your shell:
+#   export COMPOSE_FILE=docker-compose.yaml:docker-compose.litellm.yaml
+
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    container_name: postiz-litellm
+    restart: unless-stopped
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--num_workers", "1"]
+    ports:
+      - "4000:4000"
+    volumes:
+      - /Volumes/RESEARCH_SSD/postiz/litellm/config.yaml:/app/config.yaml:ro
+    environment:
+      # Master key Postiz uses to authenticate to LiteLLM
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY must be set in .env}
+      # Real provider keys consumed by LiteLLM when it dispatches outbound calls.
+      # Blank values disable the provider (LiteLLM will fall back to the next model).
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      FIREWORKS_API_KEY: ${FIREWORKS_API_KEY:-}
+    networks:
+      - postiz-network
+    extra_hosts:
+      # Belt-and-braces: ensure containers can reach Mac host (Ollama on :11434)
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      # LiteLLM image lacks wget but ships python — probe via stdlib urllib.
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; urllib.request.urlopen('http://localhost:4000/health/liveliness', timeout=3); sys.exit(0)\" || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+networks:
+  postiz-network:
+    external: false
