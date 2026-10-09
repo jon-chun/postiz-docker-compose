@@ -26,6 +26,8 @@
 
 Five stacks, ~17 containers, ~16 GB on the external SSD. Brought up incrementally with explicit per-stack isolation (each compose project has its own bridge network). One shared concern — the **LiteLLM** sidecar in the Postiz stack — exposes an OpenAI-compatible endpoint on `:4000` that any other stack can call through `host.docker.internal:4000` for unified LLM routing across providers (OpenAI, Anthropic, Google, OpenRouter, Fireworks, local Ollama). Stacks are managed end-to-end via **Dockge** (web UI) and **Lazydocker** (TUI).
 
+**Documentation structure (post-2026-05-26):** the README is a tight orientation + 5-min quickstart (~250 lines), [`docs/user-manual.md`](../docs/user-manual.md) is the comprehensive walk-through (~1500 lines, Parts I–X + 5 appendices), and *this* plan is the architectural decision log. The repo lives at https://github.com/jon-chun/postiz-docker-compose as a fork of `gitroomhq/postiz-docker-compose`; first published 2026-05-27 as commit `5e35544`.
+
 ---
 
 ## 2. Final architecture (as built 2026-05-26)
@@ -43,6 +45,8 @@ Five stacks, ~17 containers, ~16 GB on the external SSD. Brought up incrementall
 | Stack manager | Dockge `louislam/dockge:1` at `http://localhost:5001` |
 | TUI manager | Lazydocker 0.25.2 via `brew install lazydocker` |
 | Repo (Postiz fork) | `/Users/jonc/code/postiz-docker-compose` (symlinked into stacks dir) |
+| Git `origin` | `jon-chun/postiz-docker-compose` (your fork — read/write, HTTPS) |
+| Git `upstream` | `gitroomhq/postiz-docker-compose` (read-only, for `git fetch upstream`) |
 
 ### 2.2 Stack inventory
 
@@ -113,6 +117,25 @@ Each compose project gets its own bridge network by default — strong isolation
 
 `unless-stopped` is preferred for dev work — you can `docker compose stop <stack>` and it stays stopped. `always` is fine for the Postiz core but means it'll come back after an explicit stop too.
 
+### 2.7 Git remote topology
+
+After the 2026-05-27 push, this repo has two remotes:
+
+| Remote | URL | Use |
+|--------|-----|-----|
+| `origin` | https://github.com/jon-chun/postiz-docker-compose | Your fork — read/write, default push target |
+| `upstream` | https://github.com/gitroomhq/postiz-docker-compose | Postiz upstream — read-only via `git fetch upstream` |
+
+Both are HTTPS (matches the `gh` CLI's auth config). To pull future upstream Postiz changes:
+
+```bash
+git fetch upstream
+git merge upstream/main      # or `git rebase upstream/main` for linear history
+git push origin main
+```
+
+Merge conflicts most likely on `docker-compose.yaml` (we've edited interpolation + restart policies + port + project name) and `README.md` (fully rewritten). The decisions in §3 are the rationale you'd cite when resolving them.
+
 ---
 
 ## 3. Decisions made — pros/cons
@@ -177,6 +200,23 @@ Spotlight + the entire Temporal stack (5 containers) had no `restart:` policy in
 
 Single source of truth. Adding a new SOTA provider = edit `.env` once, restart LiteLLM, every stack benefits.
 
+### Decision 3.8 — Three-document split: README ↔ user-manual ↔ devops plan
+
+| Document | Audience | Length | Job |
+|----------|----------|--------|-----|
+| [`README.md`](../README.md) | First-time visitor to the GitHub repo | ~250 lines | Orient + 5-min quickstart + top-3 troubleshooting recipes + index |
+| [`docs/user-manual.md`](../docs/user-manual.md) | Operator (future-you, teammate) — install-through-troubleshoot | ~1500 lines | Comprehensive step-by-step. Parts I–X + 5 Appendices. Survives long absences. |
+| `dev/plan_devops_orbstack-multi-swap_20260526.md` *(this file)* | Architect — *why* it's shaped this way | ~700 lines | Decision log, pros/cons, integration patterns. Doesn't repeat the manual. |
+
+Rejected alternatives: one giant README (poor onboarding signal, undiscoverable interior); separate docs per concern (n8n manual, postiz manual, etc. — fragments cross-stack patterns).
+
+**The contract between docs:**
+- README **links into** user-manual section anchors for any topic deeper than a paragraph.
+- User-manual **links back to** README only for the at-a-glance landing experience.
+- This plan **does not** repeat user-manual content; it references the manual for "how" and focuses on rationale ("why").
+
+When the stack composition changes (new stack added, model list edited, etc.), all three may need touches — see §8 "Future considerations" for the maintenance item.
+
 ---
 
 ## 4. Step-by-step implementation log (what we ran)
@@ -216,9 +256,27 @@ Reconstructed in execution order — each ✅ marks a `docker compose ps` / `cur
 17. ✅ Wrote `stacks/n8n/docker-compose.yaml` + `.env` (generated `N8N_ENCRYPTION_KEY` via `openssl rand -hex 32`, `GENERIC_TIMEZONE=America/New_York`, runners enabled). `up -d` → http://localhost:5678 returns 200.
 18. ✅ Cloned `vakovalskii/searcharvester`, wrote `.env` (sending LiteLLM master key as `OPENAI_API_KEY`, `OPENAI_BASE_URL=http://host.docker.internal:4000/v1`, UID/GID set, frontend `VITE_API_URL`), generated `config.yaml` with rotated `secret_key`. `up -d` → searxng :8999, tavily-adapter :8000, frontend :9762 all return 200.
 
-### Phase E — Final state
+### Phase E — Operational hardening (2026-05-26)
 
-- All 17 containers Up, 16 GB on external SSD, 10/10 HTTP probes green.
+19. ✅ Pinned `name: postiz-docker-compose` at the top of `docker-compose.yaml` (Decision 3.4a) — fixed empty `docker compose ps` output when invoked through the symlink.
+20. ✅ Appended Postiz + multi-stack zsh aliases to `~/.zshrc` in a marker-guarded block (`# >>> postiz/orbstack stacks (added 2026-05-26) >>>`). Verified `pup`, `dups`, `pllm`, etc. resolve in a fresh subshell.
+21. ✅ Wrote Claude memory at `~/.claude/projects/-Users-jonc-code-postiz-docker-compose/memory/hardware-and-paths.md` indexed by `MEMORY.md` — captures hardware/paths/tooling so future Claude sessions don't re-discover them.
+
+### Phase F — Documentation and publication (2026-05-26 → -27)
+
+22. ✅ Wrote this plan (`dev/plan_devops_orbstack-multi-swap_20260526.md`) — synthesis of decisions and operations runbook.
+23. ✅ Rewrote `README.md` from upstream's brief intro to a comprehensive professional README.
+24. ✅ Trimmed `README.md` to ~250 lines (orientation + quickstart + top recipes), with depth pushed to `docs/user-manual.md` (~1500 lines, Parts I–X + 5 Appendices) — Decision 3.8.
+25. ✅ Created `.env.example` template (with `openssl` invocations in comments) so future clones can bootstrap without reading the manual.
+26. ✅ Lived through a real **SSD-disconnect incident** — diagnosed via `diskutil list` (no entry → physical disconnect), reseated cable, restarted OrbStack via `orb start` (not `open -a OrbStack`), brought all stacks back with the loop in §6.1. Captured the full recipe at §7.2.
+27. ✅ `git commit -m "feat: LiteLLM gateway, .env interpolation, multi-stack ops docs"` → commit `5e35544` (8 files, +3334/-298).
+28. ✅ `gh repo fork --remote=true --remote-name=origin --clone=false` → created `jon-chun/postiz-docker-compose`. Resolved `gh`'s refusal to overwrite the existing `origin` by renaming `origin → upstream` and adding the fork as a new `origin`. Pushed `main` with `-u origin main`.
+
+### Phase G — Steady state (current)
+
+- All 17 containers `Up`, ~16 GB on external SSD, all HTTP probes green.
+- Public fork at https://github.com/jon-chun/postiz-docker-compose tracks upstream via `upstream` remote.
+- zsh aliases live; Claude memory live; three docs (README + user-manual + this plan) live and cross-linked.
 
 ---
 
@@ -356,6 +414,33 @@ alias dlog='lazydocker'
 
 `dups` (docker-ups) prints status of every stack in one screen. `dlog` opens Lazydocker.
 
+### 6.8 Git workflow (fork ↔ upstream)
+
+```bash
+# Day-to-day: commit and push your changes
+git add <files>
+git commit -m "<message>"
+git push                                # `main` tracks `origin/main` (the fork)
+
+# Periodically: pull Postiz upstream changes into your fork
+git fetch upstream
+git log HEAD..upstream/main --oneline   # see what's new upstream
+git merge upstream/main                 # or `git rebase upstream/main` for linear history
+git push origin main
+
+# Resolving merge conflicts (most likely on docker-compose.yaml + README.md):
+# - For docker-compose.yaml — keep your interpolation/restart/port/name customizations,
+#   cherry-pick any new env vars or service additions from upstream.
+# - For README.md — yours is a full rewrite; upstream changes here usually concern
+#   upstream's quickstart text and don't apply. Resolve in your favor.
+
+# Compare a local file with upstream's:
+git show upstream/main:docker-compose.yaml > /tmp/upstream-compose.yaml
+diff docker-compose.yaml /tmp/upstream-compose.yaml
+```
+
+You **cannot** accidentally `git push` to upstream: HTTPS without write tokens returns a 403, so a misdirected push fails loudly instead of corrupting upstream.
+
 ---
 
 ## 7. Troubleshooting recipes
@@ -374,19 +459,58 @@ orb status   # should say Running
 
 ### 7.2 Containers gone after sleep/wake or SSD unmount
 
-OrbStack VM gets SIGKILLed on Mac sleep; only services with `restart: always` or `unless-stopped` come back. Bring the rest up:
+**Symptom progression (lived through 2026-05-27):**
+1. Browser can't reach `http://localhost:5001` (or any stack URL).
+2. `docker ps` hangs or returns "failed to connect to the docker API at unix:///Users/jonc/.orbstack/run/docker.sock".
+3. `orb status` reports `Stopped` (or sometimes `Starting` indefinitely).
+4. `ls /Volumes/RESEARCH_SSD/` returns "Permission denied" — directory entry stale.
+5. `diskutil list | grep RESEARCH_SSD` returns nothing — the SSD is physically disconnected (most common cause) or in a broken state.
+
+**Why it cascades:** OrbStack's VM data dir is symlinked to `/Volumes/RESEARCH_SSD/orbstack/data`. If the SSD unmounts (USB-C cable loose, hub power glitch, "put hard disks to sleep" enabled, manual eject), the symlink dangles → OrbStack can't access its VM → VM dies → every container dies with it.
+
+**Recovery procedure:**
 
 ```bash
-cd $STACKS_DIR/postiz && docker compose up -d
-cd $STACKS_DIR/_dockge && docker compose up -d
-# ... etc
+# 1. Confirm the SSD really is gone
+diskutil list | grep RESEARCH_SSD
+ls /Volumes/RESEARCH_SSD/ >/dev/null 2>&1 && echo "mounted" || echo "NOT mounted"
+
+# 2. Physically reseat the USB-C / Thunderbolt cable.
+#    Try a different port. If on a hub, bypass it (connect straight to the Mac).
+
+# 3. Wait 5 s, re-verify
+diskutil list | grep RESEARCH_SSD                    # should show now
+df -h /Volumes/RESEARCH_SSD                          # should print the volume
+
+# 4. Start OrbStack — `orb start` is more reliable than the GUI here
+orb start
+for i in $(seq 1 30); do
+  s=$(orb status 2>/dev/null)
+  echo "[$i] $s"
+  [ "$s" = "Running" ] && break
+  sleep 2
+done
+
+# 5. Bring stacks back. `restart: always` / `unless-stopped` services auto-recover;
+#    the rest need this loop:
+cd ~/code/postiz-docker-compose && \
+  docker compose -f docker-compose.yaml -f docker-compose.litellm.yaml up -d
+for d in /Volumes/RESEARCH_SSD/stacks/{_dockge,stirling-pdf,n8n,searcharvester}/; do
+  (cd "$d" && docker compose up -d)
+done
+
+# 6. Verify (every probe should return non-000)
+docker ps --format 'table {{.Names}}\t{{.Status}}' | head -20
+for p in 4007 5001 5678 8080 18080 4000 8000 8999 9762; do
+  printf '  :%-5s -> %s\n' "$p" \
+    "$(curl -fsS -o /dev/null -w '%{http_code}' --max-time 5 http://localhost:$p/ 2>/dev/null || echo "000")"
+done
 ```
 
-Or one-liner (relies on the `dups` alias above):
-
-```bash
-for d in $STACKS_DIR/*/; do (cd "$d" && docker compose up -d); done
-```
+**Prevention (do once):**
+- macOS → **System Settings → Battery → Options → "Put hard disks to sleep when possible" → OFF.**
+- Bypass bus-powered USB hubs for the SSD; connect straight to the Mac.
+- OrbStack → Settings → General → "Start at login" → ON.
 
 ### 7.3 macOS Keychain popup during `docker compose pull`
 
@@ -450,6 +574,44 @@ Hermes child container failed to spawn — usually `OPENAI_API_KEY` or `OPENAI_B
 docker exec tavily-adapter sh -c 'apk add --no-cache curl >/dev/null 2>&1; curl -fsS http://host.docker.internal:4000/health/liveliness'
 ```
 
+### 7.11 LiteLLM container shows "unhealthy" but actually works
+
+`docker inspect postiz-litellm --format='{{ .State.Health.Status }}'` reports `unhealthy` while `curl http://localhost:4000/health/liveliness` returns `"I'm alive!"`.
+
+**Cause:** an earlier `docker-compose.litellm.yaml` healthcheck used `wget`, but the LiteLLM image ships `curl` and Python — not `wget`. The healthcheck always fails; the container is marked unhealthy. Any `depends_on: { condition: service_healthy }` gated on this container would stall.
+
+**Fix (already applied in this fork — verify if you cherry-pick a different overlay):**
+
+```yaml
+healthcheck:
+  test: ["CMD-SHELL", "python -c \"import urllib.request,sys; urllib.request.urlopen('http://localhost:4000/health/liveliness', timeout=3); sys.exit(0)\" || exit 1"]
+  interval: 30s
+  timeout: 5s
+  retries: 3
+  start_period: 20s
+```
+
+### 7.12 `docker compose ps` empty when invoked through a symlink
+
+You `cd /Volumes/RESEARCH_SSD/stacks/postiz/` (a symlink to `~/code/postiz-docker-compose/`) and `docker compose ps` returns nothing — but the containers are running.
+
+**Cause:** project name defaults to the **symlink directory's** basename (`postiz`), not the target's (`postiz-docker-compose`). To Compose, those are two different projects.
+
+**Fix (already applied — Decision 3.4a):** the `name:` field at the top of `docker-compose.yaml` pins project name to `postiz-docker-compose` regardless of cwd. If you remove or change it, **don't recreate** under the alternate name — the existing volumes (`postgres-volume`, `postiz-uploads`, etc.) would orphan and you'd lose data.
+
+### 7.13 `gh repo fork --remote-name=origin` refuses to overwrite
+
+**Symptom:** `gh repo fork --remote=true --remote-name=origin` errors with `a git remote named 'origin' already exists`. The fork on GitHub *is* created — but no local remote is added, leaving `origin` still pointing at upstream.
+
+**Recovery (we did this 2026-05-27):**
+
+```bash
+git remote rename origin upstream
+git remote add origin https://github.com/<you>/postiz-docker-compose.git
+git push -u origin main
+git remote -v   # confirm: origin → fork, upstream → gitroomhq
+```
+
 ---
 
 ## 8. Future considerations
@@ -462,6 +624,8 @@ docker exec tavily-adapter sh -c 'apk add --no-cache curl >/dev/null 2>&1; curl 
 | **launchd nightly backups** | Now if data matters | ~15 min, one `~/Library/LaunchAgents/*.plist` |
 | **Postgres migration: n8n SQLite → Postgres** | If n8n workflows become heavy | ~20 min |
 | **Pin image tags** instead of `:latest` / `:1` | When you hit a "worked yesterday" bug | 30 s per stack |
+| **Sync README + user-manual + this plan** | After any stack composition change (new stack, model edit, port change) | ~10 min — README/user-manual section anchors usually need updating; this plan needs an entry in §4 |
+| **Pull Postiz upstream changes** | When upstream tags a new release | ~5 min via `git fetch upstream && git merge` (conflicts likely in `docker-compose.yaml` + `README.md` — see §6.8) |
 
 ---
 
@@ -484,44 +648,55 @@ docker exec tavily-adapter sh -c 'apk add --no-cache curl >/dev/null 2>&1; curl 
 ### Appendix B — File inventory
 
 ```
-Created or modified by this work:
+Created or modified by this work — all in commit 5e35544 unless noted:
 
-/Users/jonc/code/postiz-docker-compose/
-├── .env                                          [created — secrets, gitignored]
-├── docker-compose.yaml                           [modified — interpolation + 7 restart policies + port remap]
+/Users/jonc/code/postiz-docker-compose/                git origin:   jon-chun/postiz-docker-compose
+                                                       git upstream: gitroomhq/postiz-docker-compose
+├── .env                                          [LOCAL ONLY, gitignored via ~/.gitignore_global]
+├── .env.example                                  [created — template for new clones]
+├── docker-compose.yaml                           [modified — name pin + interpolation + 7 restart policies + 8080→18080 port remap]
 ├── docker-compose.litellm.yaml                   [created — LiteLLM overlay, python healthcheck]
-├── README.md                                     [rewritten — see Phase C2]
+├── README.md                                     [rewritten 2x: full replacement → trimmed to ~250 lines (Decision 3.8)]
+├── docs/
+│   └── user-manual.md                            [created ~1500 lines — Parts I–X + 5 appendices (Decision 3.8)]
 └── dev/
-    ├── plan_setup-config.md                      [created earlier — Postiz-only setup plan]
+    ├── plan_setup-config.md                      [created — Postiz-only setup plan, predates multi-stack work]
     ├── plan_devops_orbstack-multi-swap_20260526.md  [this file]
     └── MacBookProM4-setup.md                     [pre-existing Grok notes]
 
-/Volumes/RESEARCH_SSD/
+/Volumes/RESEARCH_SSD/                            [NOT committed — operational data lives outside the repo]
 ├── postiz/
-│   ├── secrets.env                               [chmod 600 master copy]
+│   ├── secrets.env                               [chmod 600 master copy of .env]
 │   ├── litellm/config.yaml                       [14-model router]
-│   ├── backups/
-│   ├── scripts/
-│   └── config/
-└── stacks/
+│   ├── backups/                                  [pg_dump targets]
+│   ├── scripts/                                  [backup.sh helper]
+│   └── config/                                   [reserved]
+└── stacks/                                       [Dockge STACKS_DIR]
     ├── _dockge/
     │   ├── docker-compose.yaml                   [created]
-    │   └── data/                                 [Dockge state]
+    │   └── data/                                 [Dockge state — admin account, stack metadata]
     ├── n8n/
     │   ├── docker-compose.yaml                   [created]
-    │   ├── .env                                  [chmod 600, encryption key]
-    │   └── data/                                 [SQLite + workflows]
+    │   ├── .env                                  [chmod 600, encryption key — back this up!]
+    │   └── data/                                 [SQLite + workflows + creds]
     ├── stirling-pdf/
     │   ├── docker-compose.yaml                   [created]
     │   └── data/{trainingData,extraConfigs,...}
-    ├── searcharvester/                           [cloned from upstream]
+    ├── searcharvester/                           [cloned from vakovalskii/searcharvester @ 2026-05-26]
     │   ├── .env                                  [chmod 600, wired through LiteLLM]
     │   └── config.yaml                           [secret_key rotated]
-    └── postiz                                    [symlink → ~/code/postiz-docker-compose]
+    └── postiz                                    [symlink → /Users/jonc/code/postiz-docker-compose]
 
-/opt/homebrew/bin/lazydocker                      [installed via brew]
+Host-level installs (not in any repo):
+/opt/homebrew/bin/lazydocker                      [v0.25.2, via brew]
 
-~/.docker/config.json                             [touched temporarily to bypass keychain; restored]
+~/.zshrc                                          [appended alias block, marker `>>> postiz/orbstack stacks (added 2026-05-26)`]
+
+~/.docker/config.json                             [`credsStore: osxkeychain` — user accepted Keychain prompt permanently]
+
+~/.claude/projects/-Users-jonc-code-postiz-docker-compose/memory/
+├── MEMORY.md                                     [index, single entry]
+└── hardware-and-paths.md                         [Claude memory: hardware/SSD/Ollama/ports/tooling]
 ```
 
 ### Appendix C — Glossary
@@ -538,25 +713,38 @@ Created or modified by this work:
 ### Appendix D — One-page operator cheat sheet
 
 ```bash
-# Status everywhere
+# ── Status everywhere ──
 docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+dups                              # alias — `compose ps` for every stack
 
-# Open the manager
-open http://localhost:5001       # Dockge
-lazydocker                       # TUI
+# ── Open the manager ──
+odockge                           # alias — open http://localhost:5001 in browser
+lazydocker                        # or `dlog` alias — TUI
 
-# Per-stack
-pup                              # postiz up (alias)
+# ── Per-stack ──
+pup / pdown / pps / plogs         # Postiz (auto-includes LiteLLM overlay)
+prestart / ppull / pexec / ppsql  # Postiz: restart / pull-and-up / exec / psql
+pllm                              # list LiteLLM model aliases
 cd $STACKS_DIR/<name> && docker compose up -d
 cd $STACKS_DIR/<name> && docker compose down
 
-# AI gateway
+# ── AI gateway ──
 curl -fsS http://localhost:4000/health/liveliness
-curl -fsS -H "Authorization: Bearer $LITELLM_MASTER_KEY" http://localhost:4000/v1/models | jq
+LMK=$(grep ^LITELLM_MASTER_KEY $POSTIZ_DIR/.env | cut -d= -f2)
+curl -fsS -H "Authorization: Bearer $LMK" http://localhost:4000/v1/models | jq
 
-# Backups
-$POSTIZ_DIR/scripts/backup.sh     # postgres
+# ── Recovery after SSD/sleep ──
+diskutil list | grep RESEARCH_SSD     # SSD mounted?
+orb start                              # Start the OrbStack VM
+for d in $STACKS_DIR/*/; do (cd "$d" && docker compose up -d); done
+
+# ── Backups ──
+$POSTIZ_DIR/scripts/backup.sh         # Postgres
 tar czf ... -C $STACKS_DIR/n8n data
+
+# ── Git (fork ↔ upstream) ──
+git fetch upstream && git log HEAD..upstream/main --oneline
+git merge upstream/main && git push origin main
 ```
 
 **URLs:**
@@ -571,6 +759,10 @@ tar czf ... -C $STACKS_DIR/n8n data
 - http://localhost:8969 — Spotlight (Postiz debug)
 - http://localhost:4000 — LiteLLM gateway (set Authorization: Bearer ...)
 
+**GitHub:**
+- Your fork: https://github.com/jon-chun/postiz-docker-compose
+- Upstream: https://github.com/gitroomhq/postiz-docker-compose
+
 ---
 
-*End of plan. Live state of this machine is the operational source-of-truth; this document is a synthesis.*
+*End of plan. Live state of this machine is the operational source-of-truth; this document is a synthesis. See also: [`README.md`](../README.md) for the quickstart, [`docs/user-manual.md`](../docs/user-manual.md) for the comprehensive operator manual.*
